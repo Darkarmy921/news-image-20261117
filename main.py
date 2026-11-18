@@ -1,21 +1,33 @@
 #!/usr/bin/env python3
-"""news-image-20261117: sum up 17 November 2026's world news in one image.
+"""news-image-20261117 v2: THE WORLD IN FOCUS - 17 November 2026.
 
 A Python 3.13 standard-library-only program. It draws a one-page newspaper
-front page (1024 x 1024) and writes it to $MAKEFUN_OUTPUT_DIR/entry.png
-(or /output/entry.png). No network, no time, no randomness: two runs write
-byte-identical files.
+front page (1024 x 1024) summing up the world news of Tuesday 17 November
+2026 and writes it to $MAKEFUN_OUTPUT_DIR/entry.png (or /output/entry.png).
+No network, no time, no randomness: two runs write byte-identical files.
 
-The five stories are the day's top stories as reported in the 17 November
-2026 daily briefs (see NEWS.md for sources):
-  1. Ukraine strike drops the road span of the Kerch (Crimea) Bridge.
-  2. A tanker is hit near the Strait of Hormuz; a third US carrier arrives.
-  3. Trump lands in Manila for the ASEAN summit, en route to China.
-  4. JPMorgan Chase blames a software bug for Monday's banking outage.
-  5. A ULA Vulcan rocket fails, destroying 40 Amazon Leo satellites.
+The day's five stories (see NEWS.md for sources):
+  1. LEAD - a Ukrainian strike drops the road arch of the 19-km Kerch
+     Bridge into the sea; traffic halted, the rail arch still stands.
+  2. U.S. and Iran trade fire in the Gulf: Iranian drones at a U.S. radar
+     in Bahrain are intercepted, no injuries; U.S. jets answer on Qeshm
+     Island. Tankers were also hit near Hormuz; Iran's mine claims are
+     unverified.
+  3. Trump lands in Manila for the first Quad leaders' summit in two
+     years; an AI accelerator is launched and Thailand is to scrap tariffs
+     on U.S. goods.
+  4. Nvidia reports $115.8B revenue, up 103%, in its first results since
+     Jensen Huang's exit; Q4 guidance $130B.
+  5. A software bug (not a hack) slows Chase banking and Zelle; about
+     4,800 reports at peak.
 
 Everything is drawn procedurally: a small raster canvas, a 5x7 bitmap font
-written out below, flat-colour scenes, and a PNG encoder built on zlib.
+defined below, flat-colour scenes (the broken bridge, the Gulf tanker,
+the four Quad flags, a chip, a bank), and a PNG encoder built on zlib.
+
+Canvas note: the mission brief asked for 1536x1024, but the competition
+gate caps the image at 1024x1024, so this build is 1024x1024 - the
+largest square the gate allows.
 """
 
 import binascii
@@ -23,246 +35,292 @@ import os
 import struct
 import zlib
 
-# ---------------------------------------------------------------- canvas
+# ------------------------------------------------------------------ size
 
 W = 1024
 H = 1024
 
-PAPER = (246, 241, 227)
-INK = (17, 17, 17)
-RED = (179, 38, 30)
-BLUE = (29, 78, 137)
-DARKBLUE = (20, 50, 79)
-SKY = (191, 217, 234)
-SEA = (37, 99, 168)
-ORANGE = (232, 106, 23)
-YELLOW = (242, 194, 0)
-GREY = (138, 138, 138)
-LIGHTGREY = (205, 205, 205)
+# ---------------------------------------------------------------- palette
+
+PAPER = (247, 243, 234)      # warm off-white page
+PANEL = (253, 251, 246)      # panel fill, near-white
+INK = (22, 21, 19)           # near-black text / frames
+RED = (168, 30, 35)          # kickers, rules, stat strips
+NAVY = (29, 42, 74)          # masthead and footer bands
+ROSE = (224, 163, 166)       # theme line on the navy band
+MIST = (201, 206, 218)       # secondary text on the navy band
+SKY = (191, 217, 232)        # lead illustration sky
+SEA = (46, 110, 166)         # lead illustration sea
+SAND = (227, 217, 190)       # distant shore in the lead scene
+DECK = (43, 43, 43)          # bridge deck
+STEEL = (84, 78, 70)         # bridge pillars and fallen steel
+SMOKE = (138, 138, 138)      # smoke puffs
+SMOKE_D = (90, 88, 84)       # dark smoke core
+GREY = (107, 103, 94)        # muted grey (source line only)
 WHITE = (255, 255, 255)
-DARKGREY = (68, 68, 68)
+SAFFRON = (232, 114, 42)     # India flag top band
+LEAF = (46, 125, 50)         # India flag bottom band
+GOLD = (232, 194, 0)         # small accents
 
 
-class Canvas:
-    """A plain RGB raster canvas with a few flat drawing primitives."""
+# ------------------------------------------------------------------ raster
+
+
+class Sheet:
+    """A plain RGB raster with a few flat drawing primitives."""
 
     def __init__(self, w, h, bg):
         self.w = w
         self.h = h
         self.px = bytearray(w * h * 3)
-        self.fill_rect(0, 0, w, h, bg)
+        self.rect(0, 0, w, h, bg)
 
-    def _idx(self, x, y):
+    def _at(self, x, y):
         return (y * self.w + x) * 3
 
-    def set(self, x, y, c):
+    def put(self, x, y, c):
         if 0 <= x < self.w and 0 <= y < self.h:
-            i = self._idx(x, y)
+            i = self._at(x, y)
             self.px[i] = c[0]
             self.px[i + 1] = c[1]
             self.px[i + 2] = c[2]
 
-    def fill_rect(self, x, y, w, h, c):
-        x0 = max(0, x)
-        y0 = max(0, y)
-        x1 = min(self.w, x + w)
-        y1 = min(self.h, y + h)
+    def rect(self, x, y, w, h, c):
+        x0 = max(x, 0)
+        y0 = max(y, 0)
+        x1 = min(x + w, self.w)
+        y1 = min(y + h, self.h)
         for yy in range(y0, y1):
-            base = (yy * self.w + x0) * 3
+            base = self._at(x0, yy)
             for xx in range(x0, x1):
                 i = base + (xx - x0) * 3
                 self.px[i] = c[0]
                 self.px[i + 1] = c[1]
                 self.px[i + 2] = c[2]
 
-    def frame(self, x, y, w, h, c, t):
-        self.fill_rect(x, y, w, t, c)
-        self.fill_rect(x, y + h - t, w, t, c)
-        self.fill_rect(x, y, t, h, c)
-        self.fill_rect(x + w - t, y, t, h, c)
+    def frame(self, x, y, w, h, c, t=2):
+        self.rect(x, y, w, t, c)
+        self.rect(x, y + h - t, w, t, c)
+        self.rect(x, y, t, h, c)
+        self.rect(x + w - t, y, t, h, c)
 
     def hline(self, x, y, w, c, t=1):
-        self.fill_rect(x, y, w, t, c)
+        self.rect(x, y, w, t, c)
 
     def vline(self, x, y, h, c, t=1):
-        self.fill_rect(x, y, t, h, c)
+        self.rect(x, y, t, h, c)
 
-    def line(self, x0, y0, x1, y1, c, t=1):
-        """Bresenham line, thickened to t pixels."""
+    def seg(self, x0, y0, x1, y1, c, t=1):
+        """Bresenham segment; thickness t draws a t x t block per step."""
         dx = abs(x1 - x0)
         dy = -abs(y1 - y0)
         sx = 1 if x0 < x1 else -1
         sy = 1 if y0 < y1 else -1
         err = dx + dy
+        x, y = x0, y0
         half = t // 2
         while True:
-            self.fill_rect(x0 - half, y0 - half, t, t, c)
-            if x0 == x1 and y0 == y1:
-                break
+            self.rect(x - half, y - half, t, t, c)
+            if x == x1 and y == y1:
+                return
             e2 = 2 * err
             if e2 >= dy:
                 err += dy
-                x0 += sx
+                x += sx
             if e2 <= dx:
                 err += dx
-                y0 += sy
+                y += sy
 
     def disc(self, cx, cy, r, c):
         for yy in range(cy - r, cy + r + 1):
-            dy = yy - cy
-            dx = int((r * r - dy * dy) ** 0.5) if r * r - dy * dy >= 0 else 0
-            self.fill_rect(cx - dx, yy, dx * 2 + 1, 1, c)
+            for xx in range(cx - r, cx + r + 1):
+                if (xx - cx) * (xx - cx) + (yy - cy) * (yy - cy) <= r * r:
+                    self.put(xx, yy, c)
 
-    def polygon(self, pts, c):
-        """Even-odd scanline fill for a simple polygon."""
+    def poly(self, pts, c):
+        """Scanline fill of a simple polygon given as [(x, y), ...]."""
+        if len(pts) < 3:
+            return
         ys = [p[1] for p in pts]
-        for y in range(min(ys), max(ys) + 1):
-            xs = []
+        for yy in range(min(ys), max(ys) + 1):
+            nodes = []
             n = len(pts)
             for i in range(n):
                 x0, y0 = pts[i]
                 x1, y1 = pts[(i + 1) % n]
-                if (y0 <= y < y1) or (y1 <= y < y0):
-                    x = x0 + (y - y0) * (x1 - x0) / (y1 - y0)
-                    xs.append(x)
-            xs.sort()
-            for i in range(0, len(xs) - 1, 2):
-                self.fill_rect(int(xs[i]), y, int(xs[i + 1]) - int(xs[i]) + 1, 1, c)
+                if (y0 <= yy < y1) or (y1 <= yy < y0):
+                    nodes.append(x0 + (yy - y0) * (x1 - x0) / (y1 - y0))
+            nodes.sort()
+            for k in range(0, len(nodes) - 1, 2):
+                xa = int(nodes[k] + 0.5)
+                xb = int(nodes[k + 1] + 0.5)
+                self.rect(xa, yy, xb - xa + 1, 1, c)
 
-    def triangle(self, x0, y0, x1, y1, x2, y2, c):
-        self.polygon([(x0, y0), (x1, y1), (x2, y2)], c)
+    def tri(self, x0, y0, x1, y1, x2, y2, c):
+        self.poly([(x0, y0), (x1, y1), (x2, y2)], c)
 
 
-# ---------------------------------------------------------------- font
-# A 5x7 bitmap font, one entry per glyph: 7 rows of 5 cells ('#' = ink).
-# Only capitals, digits and the punctuation the page needs.
+# -------------------------------------------------------------------- font
+# One 5x7 bitmap family, drawn at integer scales. '#' is ink, '.' empty.
+# Uppercase, lowercase, digits and the punctuation the page needs.
 
 FONT = {
-    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
-    "C": ("01110", "10001", "10000", "10000", "10000", "10001", "01110"),
-    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
-    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
-    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
-    "G": ("01110", "10001", "10000", "10111", "10001", "10001", "01111"),
-    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "I": ("01110", "00100", "00100", "00100", "00100", "00100", "01110"),
-    "J": ("00111", "00010", "00010", "00010", "00010", "10010", "01100"),
-    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
-    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
-    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
-    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
-    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
-    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
-    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
-    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
-    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
-    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
-    "W": ("10001", "10001", "10001", "10101", "10101", "11011", "10001"),
-    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
-    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
-    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
-    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
-    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
-    "2": ("01110", "10001", "00001", "00110", "01000", "10000", "11111"),
-    "3": ("11111", "00010", "00100", "00010", "00001", "10001", "01110"),
-    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
-    "5": ("11111", "10000", "11110", "00001", "00001", "10001", "01110"),
-    "6": ("00110", "01000", "10000", "11110", "10001", "10001", "01110"),
-    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
-    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
-    "9": ("01110", "10001", "10001", "01111", "00001", "00010", "01100"),
-    " ": ("00000", "00000", "00000", "00000", "00000", "00000", "00000"),
-    ".": ("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
-    ",": ("00000", "00000", "00000", "00000", "01100", "00100", "01000"),
-    ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
-    "-": ("00000", "00000", "00000", "01110", "00000", "00000", "00000"),
-    "'": ("00100", "00100", "01000", "00000", "00000", "00000", "00000"),
-    "!": ("00100", "00100", "00100", "00100", "00100", "00000", "00100"),
-    "?": ("01110", "10001", "00001", "00110", "00100", "00000", "00100"),
-    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
-    "(": ("00010", "00100", "01000", "01000", "01000", "00100", "00010"),
-    ")": ("01000", "00100", "00010", "00010", "00010", "00100", "01000"),
-    "%": ("11001", "11010", "00010", "00100", "01000", "01011", "10011"),
-    "$": ("00100", "01111", "10100", "01110", "00101", "11110", "00100"),
-    "&": ("01100", "10010", "10100", "01000", "10101", "10010", "01101"),
-    "+": ("00000", "00100", "00100", "11111", "00100", "00100", "00000"),
-    "=": ("00000", "00000", "11111", "00000", "11111", "00000", "00000"),
-    '"': ("01010", "01010", "00000", "00000", "00000", "00000", "00000"),
-    "_": ("00000", "00000", "00000", "00000", "00000", "00000", "11111"),
-    "*": ("00000", "00100", "10101", "01110", "10101", "00100", "00000"),
+    "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "B": ("####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."),
+    "C": (".####", "#....", "#....", "#....", "#....", "#....", ".####"),
+    "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."),
+    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
+    "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#...."),
+    "G": (".####", "#....", "#....", "#.###", "#...#", "#...#", ".###."),
+    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "I": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"),
+    "J": ("..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##.."),
+    "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"),
+    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####"),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
+    "N": ("#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"),
+    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#...."),
+    "Q": (".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"),
+    "R": ("####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"),
+    "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####."),
+    "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."),
+    "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "V": ("#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "W": ("#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"),
+    "X": ("#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"),
+    "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."),
+    "Z": ("#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"),
+    "a": (".....", ".....", ".###.", "....#", ".####", "#...#", ".####"),
+    "b": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "####."),
+    "c": (".....", ".....", ".####", "#....", "#....", "#....", ".####"),
+    "d": ("....#", "....#", ".####", "#...#", "#...#", "#...#", ".####"),
+    "e": (".....", ".....", ".###.", "#...#", "#####", "#....", ".###."),
+    "f": ("..##.", ".#...", ".#...", "####.", ".#...", ".#...", ".#..."),
+    "g": (".....", ".####", "#...#", "#...#", ".####", "....#", ".###."),
+    "h": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "#...#"),
+    "i": (".....", "..#..", ".....", ".##..", "..#..", "..#..", ".###."),
+    "j": ("...#.", ".....", "..##.", "...#.", "...#.", "#..#.", ".##.."),
+    "k": ("#....", "#....", "#..#.", "#.#..", "##...", "#.#..", "#..#."),
+    "l": (".##..", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "m": (".....", ".....", "##.#.", "#.#.#", "#.#.#", "#.#.#", "#.#.#"),
+    "n": (".....", ".....", "####.", "#...#", "#...#", "#...#", "#...#"),
+    "o": (".....", ".....", ".###.", "#...#", "#...#", "#...#", ".###."),
+    "p": (".....", "####.", "#...#", "#...#", "####.", "#....", "#...."),
+    "q": (".....", ".####", "#...#", "#...#", ".####", "....#", "...#."),
+    "r": (".....", ".....", "#.##.", "##..#", "#....", "#....", "#...."),
+    "s": (".....", ".....", ".####", "#....", ".###.", "....#", "####."),
+    "t": (".#...", ".#...", "####.", ".#...", ".#...", ".#...", "..##."),
+    "u": (".....", ".....", "#...#", "#...#", "#...#", "#...#", ".###."),
+    "v": (".....", ".....", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "w": (".....", ".....", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"),
+    "x": (".....", ".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#"),
+    "y": (".....", "#...#", "#...#", "#...#", ".####", "....#", ".###."),
+    "z": (".....", ".....", "#####", "...#.", "..#..", ".#...", "#####"),
+    "0": (".###.", "#..##", "#.#.#", "##..#", "#...#", "#...#", ".###."),
+    "1": ("..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."),
+    "2": (".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"),
+    "3": ("####.", "....#", "....#", ".###.", "....#", "....#", "####."),
+    "4": ("...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."),
+    "5": ("#####", "#....", "####.", "....#", "....#", "#...#", ".###."),
+    "6": (".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."),
+    "7": ("#####", "....#", "...#.", "..#..", "..#..", "..#..", "..#.."),
+    "8": (".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."),
+    "9": (".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."),
+    " ": (".....", ".....", ".....", ".....", ".....", ".....", "....."),
+    ".": (".....", ".....", ".....", ".....", ".....", ".##..", ".##.."),
+    ",": (".....", ".....", ".....", ".....", ".##..", ".##..", ".#..."),
+    ":": (".....", ".##..", ".##..", ".....", ".##..", ".##..", "....."),
+    ";": (".....", ".##..", ".##..", ".....", ".##..", ".##..", ".#..."),
+    "'": ("..#..", "..#..", ".#...", ".....", ".....", ".....", "....."),
+    "!": ("..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."),
+    "?": (".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."),
+    "-": (".....", ".....", ".....", "#####", ".....", ".....", "....."),
+    "\u2014": (".....", ".....", ".....", "#####", "#####", ".....", "....."),
+    "\u00b7": (".....", ".....", ".....", ".##..", ".##..", ".....", "....."),
+    "$": ("..#..", ".####", "#.#..", ".###.", "..#.#", "####.", "..#.."),
+    "%": ("##..#", "##.#.", "...#.", "..#..", ".#...", "#.#.#", "#..##"),
+    "~": (".....", ".....", ".#.#.", "#.#.#", ".....", ".....", "....."),
+    "(": ("...#.", "..#..", ".#...", ".#...", ".#...", "..#..", "...#."),
+    ")": (".#...", "..#..", "...#.", "...#.", "...#.", "..#..", ".#..."),
+    "/": ("....#", "....#", "...#.", "..#..", ".#...", "#....", "#...."),
+    "+": (".....", "..#..", "..#..", "#####", "..#..", "..#..", "....."),
+    "=": (".....", ".....", "#####", ".....", "#####", ".....", "....."),
+    '"': (".#.#.", ".#.#.", ".....", ".....", ".....", ".....", "....."),
+    "&": (".##..", "#..#.", "#..#.", ".#...", "#.#.#", "#..#.", ".##.#"),
+    "#": ("#.#.#", "#.#.#", "#####", "#.#.#", "#####", "#.#.#", "#.#.#"),
+    "*": (".....", ".#.#.", "..#..", "#####", "..#..", ".#.#.", "....."),
 }
 
-# Bullet: a small solid square, drawn mid-cap-height.
-BULLET = ("00000", "00000", "01100", "01100", "00000", "00000", "00000")
-
-CHAR_W = 6  # advance per character, in font cells (5 + 1 space)
+UNKNOWN = ("#####", "#...#", "#.###", "#.#.#", "#####", "#...#", "#####")
 
 
-def text_width(s, scale):
-    return len(s) * CHAR_W * scale - scale
+def text_w(s, scale):
+    """Pixel width of s at scale (one scale-wide gap between glyphs)."""
+    if not s:
+        return 0
+    return len(s) * 6 * scale - scale
 
 
-def draw_char(cv, x, y, ch, scale, color):
-    glyph = FONT.get(ch)
-    if glyph is None:
-        if ch == "\u2022":
-            glyph = BULLET
-        else:
-            glyph = FONT[" "]
-    for row in range(7):
-        bits = glyph[row]
-        for col in range(5):
-            if bits[col] == "1":
-                cv.fill_rect(x + col * scale, y + row * scale, scale, scale, color)
+def glyph(cv, x, y, ch, scale, color):
+    rows = FONT.get(ch, UNKNOWN)
+    for ry in range(7):
+        row = rows[ry]
+        for rx in range(5):
+            if row[rx] == "#":
+                cv.rect(x + rx * scale, y + ry * scale, scale, scale, color)
 
 
-def draw_text(cv, x, y, s, scale, color, align="left"):
-    if align == "center":
-        x = x - text_width(s, scale) // 2
-    elif align == "right":
-        x = x - text_width(s, scale)
+def text(cv, x, y, s, scale, color, align="left", width=None):
+    """Draw one line. align centre/right need the width of the field."""
+    w = text_w(s, scale)
+    if align == "center" and width is not None:
+        x = x + (width - w) // 2
+    elif align == "right" and width is not None:
+        x = x + width - w
     cx = x
     for ch in s:
-        draw_char(cv, cx, y, ch, scale, color)
-        cx += CHAR_W * scale
-    return cx
+        glyph(cv, cx, y, ch, scale, color)
+        cx += 6 * scale
+    return w
 
 
-def wrap_text(s, scale, max_w):
+def wrap(s, scale, max_w):
     """Greedy word wrap; returns a list of lines that fit max_w."""
     lines = []
-    for para in s.split("\n"):
-        words = para.split(" ")
+    for chunk in s.split("\n"):
+        words = chunk.split(" ")
         cur = ""
         for word in words:
             trial = word if not cur else cur + " " + word
-            if text_width(trial, scale) <= max_w or not cur:
+            if text_w(trial, scale) <= max_w:
                 cur = trial
             else:
-                lines.append(cur)
+                if cur:
+                    lines.append(cur)
                 cur = word
         if cur:
             lines.append(cur)
     return lines
 
 
-def draw_block(cv, x, y, s, scale, color, max_w, line_h=None, align="left"):
-    """Draw wrapped text; returns the y just below the last line."""
-    if line_h is None:
-        line_h = 7 * scale + scale * 2
-    for line in wrap_text(s, scale, max_w):
-        draw_text(cv, x, y, line, scale, color, align=align)
-        y += line_h
+def para(cv, x, y, s, scale, color, max_w, leading=None):
+    """Draw a wrapped paragraph; returns the y just below the last line."""
+    if leading is None:
+        leading = int(7 * scale * 1.35)
+    lines = wrap(s, scale, max_w)
+    for i, line in enumerate(lines):
+        text(cv, x, y + i * leading, line, scale, color)
+    if lines:
+        return y + (len(lines) - 1) * leading + 7 * scale
     return y
 
 
-# ---------------------------------------------------------------- PNG
+# --------------------------------------------------------------------- png
+
 
 def png_bytes(cv):
-    """Encode the canvas as a whole PNG (colour type 2, filter 0 rows)."""
+    """Encode the sheet as a PNG (truecolour, filter 0, zlib level 9)."""
 
     def chunk(kind, data):
         out = struct.pack(">I", len(data)) + kind + data
@@ -271,10 +329,9 @@ def png_bytes(cv):
 
     ihdr = struct.pack(">IIBBBBB", cv.w, cv.h, 8, 2, 0, 0, 0)
     raw = bytearray()
-    stride = cv.w * 3
-    for y in range(cv.h):
+    for yy in range(cv.h):
         raw.append(0)
-        raw += cv.px[y * stride:(y + 1) * stride]
+        raw += cv.px[yy * cv.w * 3:(yy + 1) * cv.w * 3]
     return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", ihdr)
@@ -283,242 +340,300 @@ def png_bytes(cv):
     )
 
 
-# ---------------------------------------------------------------- scenes
+# ------------------------------------------------------------------ scenes
 
-def draw_kerch(cv, x, y, w, h):
-    """The Crimea Bridge: deck in two pieces, the road arch down in the sea."""
-    cv.fill_rect(x, y, w, h, SKY)
-    sea_y = y + h - 58
-    cv.fill_rect(x, sea_y, w, h - (sea_y - y), SEA)
-    # waves
-    for wx in range(x + 8, x + w - 8, 34):
-        cv.line(wx, sea_y + 18, wx + 12, sea_y + 12, WHITE, 3)
-        cv.line(wx + 12, sea_y + 12, wx + 24, sea_y + 18, WHITE, 3)
-        cv.line(wx + 4, sea_y + 40, wx + 16, sea_y + 34, WHITE, 3)
-        cv.line(wx + 16, sea_y + 34, wx + 28, sea_y + 40, WHITE, 3)
-    deck_y = y + 96
+
+def lead_scene(cv, x0, y0, w, h):
+    """The Kerch Bridge: sky, shore, sea, a deck with a gap in the middle,
+    the standing road arch on the left, its broken stub on the right, the
+    fallen arch in the water, and smoke over the gap."""
+    sky_h = 172
+    sea_y = y0 + 178
+    cv.rect(x0, y0, w, sky_h, SKY)
+    cv.rect(x0, y0 + 164, w, 14, SAND)          # distant shore
+    cv.rect(x0, sea_y, w, y0 + h - sea_y, SEA)  # the strait
+
+    # white wave dashes on the sea
+    for wx, wy, wl in (
+        (x0 + 30, sea_y + 30, 34), (x0 + 150, sea_y + 52, 26),
+        (x0 + 330, sea_y + 26, 40), (x0 + 420, sea_y + 58, 30),
+        (x0 + 90, sea_y + 92, 30), (x0 + 260, sea_y + 100, 36),
+        (x0 + 390, sea_y + 118, 26), (x0 + 40, sea_y + 118, 22),
+    ):
+        cv.hline(wx, wy, wl, WHITE, 3)
+
+    deck_y = y0 + 130
+    gap_l = x0 + 196
+    gap_r = x0 + 308
     # deck, left and right of the gap
-    gap_x0 = x + w // 2 - 78
-    gap_x1 = x + w // 2 + 78
-    cv.fill_rect(x, deck_y, gap_x0 - x, 14, DARKGREY)
-    cv.fill_rect(gap_x1, deck_y, x + w - gap_x1, 14, DARKGREY)
-    # deck posts
-    for px in (x + 30, x + 130, x + w - 150, x + w - 50):
-        cv.fill_rect(px, deck_y + 14, 12, sea_y - deck_y - 14, DARKGREY)
-    # broken arch stubs rising from each side of the gap
-    cv.line(gap_x0 - 6, deck_y, gap_x0 - 70, deck_y - 52, DARKGREY, 10)
-    cv.line(gap_x1 + 6, deck_y, gap_x1 + 70, deck_y - 52, DARKGREY, 10)
-    # fallen arch piece in the water, tilted
-    cv.polygon(
-        [
-            (gap_x0 + 8, sea_y + 8),
-            (gap_x1 - 8, sea_y + 26),
-            (gap_x1 - 22, sea_y + 38),
-            (gap_x0 - 6, sea_y + 20),
-        ],
-        DARKGREY,
-    )
-    # explosion burst over the gap
-    cx, cy = x + w // 2, deck_y - 34
-    cv.disc(cx, cy, 30, ORANGE)
-    cv.disc(cx, cy, 19, YELLOW)
-    cv.disc(cx - 6, cy - 4, 8, WHITE)
-    # smoke
-    cv.disc(cx - 52, cy - 26, 16, GREY)
-    cv.disc(cx - 30, cy - 44, 20, LIGHTGREY)
-    cv.disc(cx + 48, cy - 30, 15, GREY)
-    cv.disc(cx + 26, cy - 48, 18, LIGHTGREY)
-    draw_text(cv, x + 10, y + 8, "KERCH STRAIT", 2, INK)
+    cv.rect(x0, deck_y, gap_l - x0, 16, DECK)
+    cv.rect(gap_r, deck_y, x0 + w - gap_r, 16, DECK)
+    # lane dashes on the deck
+    for dx in range(x0 + 14, x0 + w - 20, 34):
+        if dx + 16 < gap_l or dx > gap_r:
+            cv.hline(dx, deck_y + 7, 16, WHITE, 2)
+    # pillars down into the water
+    for px in (x0 + 44, x0 + 140, x0 + 356, x0 + 452):
+        cv.rect(px, deck_y + 16, 10, 48, STEEL)
+
+    # standing road arch, left of the gap: a parabola of thick segments
+    prev = None
+    for step in range(0, 33):
+        ax = x0 + 24 + step * 5
+        t = step / 32.0
+        ay = deck_y - int(72 * (1 - (2 * t - 1) ** 2))
+        if prev is not None:
+            cv.seg(prev[0], prev[1], ax, ay, INK, 6)
+        prev = (ax, ay)
+    # broken stub of the arch on the right: rises, then stops mid-air
+    prev = None
+    for step in range(0, 9):
+        ax = gap_r + 8 + step * 5
+        t = step / 16.0
+        ay = deck_y - int(72 * (1 - (2 * t - 1) ** 2))
+        if prev is not None:
+            cv.seg(prev[0], prev[1], ax, ay, INK, 6)
+        prev = (ax, ay)
+
+    # smoke over the gap
+    for cx, cy, r, c in (
+        (x0 + 232, y0 + 96, 15, SMOKE),
+        (x0 + 258, y0 + 74, 19, SMOKE),
+        (x0 + 286, y0 + 98, 12, SMOKE),
+        (x0 + 258, y0 + 78, 9, SMOKE_D),
+        (x0 + 234, y0 + 98, 6, SMOKE_D),
+    ):
+        cv.disc(cx, cy, r, c)
+
+    # the fallen road arch: a sagging arc of steel, half under water,
+    # with white foam where it went in
+    prev = None
+    for step in range(0, 13):
+        ax = x0 + 206 + step * 8
+        t = step / 12.0
+        ay = sea_y + 30 + int(34 * (1 - (2 * t - 1) ** 2))
+        if prev is not None:
+            cv.seg(prev[0], prev[1], ax, ay, INK, 6)
+        prev = (ax, ay)
+    for fx, fy, fl in (
+        (x0 + 206, sea_y + 62, 22), (x0 + 238, sea_y + 78, 30),
+        (x0 + 282, sea_y + 84, 24), (x0 + 296, sea_y + 60, 16),
+    ):
+        cv.hline(fx, fy, fl, WHITE, 3)
 
 
-def draw_hormuz(cv, x, y, w, h):
-    """A burning tanker and a US aircraft carrier in the Strait of Hormuz."""
-    cv.fill_rect(x, y, w, h, SKY)
-    sea_y = y + h - 26
-    cv.fill_rect(x, sea_y, w, h - (sea_y - y), SEA)
-    # tanker, left
-    cv.fill_rect(x + 14, sea_y - 26, 150, 26, INK)
-    cv.fill_rect(x + 24, sea_y - 44, 34, 18, INK)
-    cv.fill_rect(x + 110, sea_y - 38, 12, 12, INK)
-    # fire plume from the tanker (kept inside the scene)
-    cv.disc(x + 130, sea_y - 32, 14, ORANGE)
-    cv.disc(x + 130, sea_y - 34, 9, YELLOW)
-    cv.disc(x + 104, sea_y - 38, 7, GREY)
-    cv.disc(x + 152, sea_y - 38, 7, LIGHTGREY)
-    # carrier, right: flat deck and island tower
-    cv.fill_rect(x + w - 168, sea_y - 18, 154, 18, DARKGREY)
-    cv.fill_rect(x + w - 96, sea_y - 44, 26, 26, DARKGREY)
-    cv.fill_rect(x + w - 92, sea_y - 52, 6, 8, DARKGREY)
-    # a jet on deck
-    cv.triangle(
-        x + w - 150, sea_y - 24, x + w - 128, sea_y - 24,
-        x + w - 139, sea_y - 34, LIGHTGREY,
-    )
+def gulf_strip(cv, x0, y0, w, h):
+    """Gulf strip: a tanker on the sea, two jets overhead, smoke aft."""
+    cv.rect(x0, y0, w, h, (220, 233, 242))
+    sea_y = y0 + h - 22
+    cv.rect(x0, sea_y, w, 22, SEA)
+    cv.hline(x0 + 20, sea_y + 8, 30, WHITE, 2)
+    cv.hline(x0 + 330, sea_y + 12, 36, WHITE, 2)
+    # tanker: dark hull, pale superstructure, red funnel
+    cv.rect(x0 + 56, sea_y - 14, 190, 16, NAVY)
+    cv.rect(x0 + 196, sea_y - 30, 42, 16, WHITE)
+    cv.rect(x0 + 150, sea_y - 24, 14, 10, RED)
+    cv.rect(x0 + 66, sea_y - 20, 8, 6, WHITE)
+    # smoke puff aft of the tanker, inside the strip
+    cv.disc(x0 + 232, y0 + 12, 7, SMOKE)
+    cv.disc(x0 + 240, y0 + 7, 4, SMOKE_D)
+    # two jets with contrails
+    for jx, jy in ((x0 + 320, y0 + 12), (x0 + 372, y0 + 6)):
+        cv.hline(jx - 44, jy + 3, 34, WHITE, 2)
+        cv.tri(jx, jy, jx + 22, jy + 4, jx, jy + 8, INK)
+        cv.tri(jx + 6, jy + 1, jx + 12, jy + 4, jx + 6, jy + 7, INK)
 
 
-def draw_manila(cv, x, y, w, h):
-    """Three flags on poles: the United States, the Philippines, China."""
-    cv.fill_rect(x, y, w, h, SKY)
-    cv.fill_rect(x, y + h - 22, w, 22, (120, 168, 90))
-    poles = [
-        (x + 52, "US"),
-        (x + w // 2 - 8, "PH"),
-        (x + w - 92, "CN"),
-    ]
-    for px, kind in poles:
-        cv.vline(px, y + 12, h - 30, DARKGREY, 4)
-        fx, fy = px + 4, y + 12
-        if kind == "US":
-            for i in range(7):
-                cv.fill_rect(fx, fy + i * 6, 62, 6, RED if i % 2 == 0 else WHITE)
-            cv.fill_rect(fx, fy, 26, 18, BLUE)
-            cv.disc(fx + 13, fy + 9, 3, WHITE)
-        elif kind == "PH":
-            cv.fill_rect(fx, fy, 62, 42, BLUE)
-            cv.fill_rect(fx, fy + 21, 62, 21, RED)
-            cv.triangle(fx, fy, fx, fy + 42, fx + 26, fy + 21, WHITE)
-            cv.disc(fx + 10, fy + 21, 4, YELLOW)
-        else:
-            cv.fill_rect(fx, fy, 62, 42, RED)
-            cv.disc(fx + 12, fy + 12, 5, YELLOW)
-            cv.disc(fx + 26, fy + 8, 2, YELLOW)
-            cv.disc(fx + 30, fy + 16, 2, YELLOW)
-            cv.disc(fx + 24, fy + 24, 2, YELLOW)
+def quad_flags(cv, x0, y0, w, h):
+    """Four Quad flags, each labelled underneath: USA, JPN, IND, AUS.
+    Drawn from the simplest correct geometry for each flag."""
+    fw, fh = 104, 32
+    gap = 8
+    labels = ("USA", "JPN", "IND", "AUS")
+    for i, label in enumerate(labels):
+        fx = x0 + i * (fw + gap)
+        fy = y0
+        if label == "USA":
+            cv.rect(fx, fy, fw, fh, WHITE)
+            for s in range(7):  # seven red stripes
+                cv.rect(fx, fy + s * 5, fw, 2, RED)
+            cv.rect(fx, fy, 42, 17, NAVY)  # canton
+            for gy in range(3):
+                for gx in range(4):
+                    cv.disc(fx + 6 + gx * 10, fy + 4 + gy * 5, 1, WHITE)
+        elif label == "JPN":
+            cv.rect(fx, fy, fw, fh, WHITE)
+            cv.disc(fx + fw // 2, fy + fh // 2, 10, RED)
+        elif label == "IND":
+            cv.rect(fx, fy, fw, 11, SAFFRON)
+            cv.rect(fx, fy + 11, fw, 10, WHITE)
+            cv.rect(fx, fy + 21, fw, 11, LEAF)
+            cv.disc(fx + fw // 2, fy + fh // 2, 6, NAVY)
+            cv.disc(fx + fw // 2, fy + fh // 2, 2, WHITE)
+        else:  # AUS
+            cv.rect(fx, fy, fw, fh, NAVY)
+            # simplified Union Jack canton: white saltire, red cross
+            cv.rect(fx, fy, 52, 16, WHITE)
+            cv.seg(fx, fy, fx + 52, fy + 16, RED, 2)
+            cv.seg(fx + 52, fy, fx, fy + 16, RED, 2)
+            cv.hline(fx, fy + 6, 52, RED, 4)
+            cv.vline(fx + 24, fy, 16, RED, 4)
+            # Southern Cross + big star, as white dots
+            for sx, sy in ((72, 8), (86, 18), (96, 8), (80, 26), (66, 24)):
+                cv.disc(fx + sx, fy + sy, 2, WHITE)
+        cv.frame(fx, fy, fw, fh, INK, 1)
+        text(cv, fx, fy + fh + 4, label, 2, INK, align="center", width=fw)
 
 
-def draw_bank_icon(cv, x, y, s):
-    """A small bank building, s x s."""
-    cv.fill_rect(x, y, s, s, PAPER)
-    cv.triangle(x + 4, y + 26, x + s - 4, y + 26, x + s // 2, y + 6, DARKGREY)
-    for cx in (x + 12, x + s // 2 - 5, x + s - 22):
-        cv.fill_rect(cx, y + 30, 10, s - 44, DARKGREY)
-    cv.fill_rect(x + 6, y + s - 14, s - 12, 8, DARKGREY)
-    draw_text(cv, x + s // 2, y + s - 34, "$", 2, RED, align="center")
+def chip_icon(cv, x, y, s):
+    """A small microchip: navy body, pins on four sides, red die."""
+    body = s
+    cv.rect(x - 4, y + body // 3, 4, body // 3, INK)
+    cv.rect(x + body, y + body // 3, 4, body // 3, INK)
+    cv.rect(x + body // 3, y - 4, body // 3, 4, INK)
+    cv.rect(x + body // 3, y + body, body // 3, 4, INK)
+    cv.rect(x, y, body, body, NAVY)
+    cv.rect(x + body // 4, y + body // 4, body // 2, body // 2, RED)
+    cv.rect(x + body // 4 + 3, y + body // 4 + 3, 4, 4, WHITE)
 
 
-def draw_rocket_icon(cv, x, y, s):
-    """A small rocket failing on a dark sky, s x s."""
-    cv.fill_rect(x, y, s, s, DARKBLUE)
-    # falling satellites
-    for sx, sy in ((x + 8, y + 12), (x + s - 20, y + 26), (x + 16, y + 44)):
-        cv.fill_rect(sx, sy, 10, 6, YELLOW)
-        cv.fill_rect(sx + 10, sy + 2, 6, 2, YELLOW)
-    # rocket body, tilted
-    cx = x + s // 2
-    cv.polygon(
-        [(cx - 8, y + 34), (cx + 8, y + 34), (cx + 6, y + 70), (cx - 6, y + 70)],
-        WHITE,
-    )
-    cv.triangle(cx - 8, y + 34, cx + 8, y + 34, cx, y + 14, RED)
-    cv.triangle(cx - 8, y + 62, cx - 18, y + 76, cx - 6, y + 70, RED)
-    cv.triangle(cx + 8, y + 62, cx + 18, y + 76, cx + 6, y + 70, RED)
-    # burst below
-    cv.disc(cx, y + 84, 10, ORANGE)
-    cv.disc(cx, y + 84, 5, YELLOW)
+def bank_icon(cv, x, y, s):
+    """A small bank: pediment, three columns, stepped base."""
+    cv.tri(x, y + s // 3, x + s // 2, y, x + s, y + s // 3, INK)
+    cv.rect(x + 2, y + s // 3 + 3, s - 4, 3, INK)
+    for cx in (x + 4, x + s // 2 - 3, x + s - 10):
+        cv.rect(cx, y + s // 3 + 8, 6, s // 2, INK)
+    cv.rect(x, y + s // 3 + 8 + s // 2 + 3, s, 4, INK)
+    cv.rect(x - 3, y + s // 3 + 8 + s // 2 + 9, s + 6, 4, RED)
 
 
-# ---------------------------------------------------------------- page
+# -------------------------------------------------------------------- page
 
-def panel(cv, x, y, w, h, kicker, kicker_color=RED):
-    cv.fill_rect(x, y, w, h, PAPER)
-    cv.frame(x, y, w, h, INK, 4)
-    draw_text(cv, x + 14, y + 12, kicker, 3, kicker_color)
-    return y + 12 + 7 * 3 + 10
+
+def draw_headline(cv, x, y, s, scale, color, max_w, leading):
+    """Wrapped all-caps headline; returns the y below the last line."""
+    lines = wrap(s, scale, max_w)
+    for i, line in enumerate(lines):
+        text(cv, x, y + i * leading, line, scale, color)
+    if lines:
+        return y + (len(lines) - 1) * leading + 7 * scale
+    return y
 
 
 def build():
-    cv = Canvas(W, H, PAPER)
-    cv.frame(0, 0, W, H, INK, 6)
+    cv = Sheet(W, H, PAPER)
 
-    # --- masthead
-    draw_text(cv, W // 2, 16, "THE WORLD TODAY", 9, INK, align="center")
-    cv.hline(24, 90, W - 48, RED, 6)
-    draw_text(cv, W // 2, 102, "TUESDAY, 17 NOVEMBER 2026", 5, INK, align="center")
+    # ---------------------------------------------------------- masthead
+    cv.rect(0, 0, W, 128, NAVY)
+    text(cv, 0, 14, "THE WORLD IN FOCUS", 7, WHITE, align="center", width=W)
+    cv.hline(32, 68, 960, RED, 3)
+    text(cv, 32, 78, "TUESDAY, 17 NOVEMBER 2026", 3, WHITE)
+    text(cv, 0, 78, "STRIKES AND SUMMITS", 3, ROSE, align="right", width=992)
+    text(cv, 0, 104, "War escalates in two theatres while leaders meet "
+         "in Manila.", 2, MIST, align="center", width=W)
 
-    # --- lead story: the Crimea Bridge
-    lx, ly, lw, lh = 12, 148, 1000, 368
-    cv.fill_rect(lx, ly, lw, lh, PAPER)
-    cv.frame(lx, ly, lw, lh, INK, 4)
-    draw_text(cv, lx + 14, ly + 12, "LEAD STORY - UKRAINE WAR", 3, RED)
-    draw_text(cv, lx + 14, ly + 40, "CRIMEA BRIDGE SPAN", 6, INK)
-    draw_text(cv, lx + 14, ly + 84, "FALLS INTO THE SEA", 6, INK)
-    draw_kerch(cv, lx + 14, ly + 136, 560, 218)
-    cap_x = lx + 590
-    y = draw_block(
-        cv, cap_x, ly + 144,
-        "UKRAINE SAYS ITS STRIKE DROPPED THE ROAD ARCH OF THE 19-KM KERCH BRIDGE.",
-        3, INK, 396, line_h=26,
-    )
-    draw_block(
-        cv, cap_x, y + 6,
-        "THE RAIL BRIDGE STILL STANDS. TRAFFIC IS HALTED. THE KREMLIN VOWS TO REBUILD.",
-        3, INK, 396, line_h=26,
-    )
+    # -------------------------------------------------------------- lead
+    cv.frame(16, 128, 992, 312, INK, 2)
+    cv.rect(18, 130, 502, 308, PANEL)
+    lead_scene(cv, 18, 130, 500, 308)
+    cv.vline(520, 130, 308, INK, 2)
+    text(cv, 536, 140, "EUROPE \u00b7 UKRAINE WAR", 2, RED)
+    draw_headline(cv, 536, 160, "BRIDGE SPAN FALLS INTO THE SEA",
+                  4, INK, 456, 36)
+    cv.hline(536, 240, 120, RED, 3)
+    para(cv, 536, 250,
+         "Ukraine says its strike dropped the road arch of the 19-km "
+         "Kerch Bridge. Traffic is halted. The rail arch stands; the "
+         "Kremlin vows to rebuild.",
+         3, INK, 456, 28)
+    text(cv, 536, 422, "2ND STRIKE IN UNDER 24 HOURS", 2, RED)
 
-    # --- second row: Hormuz and Manila
-    ry, rh, rw = 524, 236, 488
-    # Hormuz
-    hx = 12
-    ty = panel(cv, hx, ry, rw, rh, "MIDDLE EAST - HORMUZ")
-    draw_hormuz(cv, hx + 14, ty, rw - 28, 64)
-    y = draw_block(cv, hx + 14, ty + 72,
-                   "TANKER HIT AS 3RD CARRIER ARRIVES", 4, INK, rw - 28,
-                   line_h=30)
-    draw_block(cv, hx + 14, y + 4,
-               "MINES ARE BLAMED. IRAN'S CLAIMS ARE UNVERIFIED.", 3, INK,
-               rw - 28, line_h=21)
-    # Manila
-    mx = 524
-    ty = panel(cv, mx, ry, rw, rh, "ASIA - SUMMIT DIPLOMACY")
-    draw_manila(cv, mx + 14, ty, rw - 28, 64)
-    y = draw_block(cv, mx + 14, ty + 72,
-                   "TRUMP LANDS IN MANILA", 4, INK, rw - 28,
-                   line_h=30)
-    draw_block(cv, mx + 14, y + 4,
-               "FOR THE ASIA SUMMIT. THEN XI AND PUTIN.", 3, INK,
-               rw - 28, line_h=21)
+    # -------------------------------------------------------- middle row
+    # Gulf, left
+    cv.frame(16, 440, 492, 304, INK, 2)
+    cv.rect(18, 442, 488, 300, PANEL)
+    gulf_strip(cv, 18, 442, 488, 54)
+    cv.hline(18, 496, 488, INK, 2)
+    text(cv, 32, 504, "MIDDLE EAST \u00b7 THE GULF", 2, RED)
+    text(cv, 32, 524, "U.S. AND IRAN TRADE FIRE", 3, INK)
+    para(cv, 32, 552,
+         "Iran's drones target a U.S. radar in Bahrain \u2014 intercepted, "
+         "no injuries. U.S. jets answer on Qeshm Island.",
+         3, INK, 460, 26)
+    para(cv, 32, 683,
+         "Tankers were also hit near Hormuz; Iran's mine claims are "
+         "unverified.",
+         2, INK, 460, 18)
+    text(cv, 32, 722, "3RD DRONE ATTACK ON BAHRAIN IN 5 DAYS", 2, RED)
 
-    # --- third row: JPMorgan and Vulcan
-    by, bh = 768, 180
-    # JPMorgan
-    bx = 12
-    ty = panel(cv, bx, by, rw, bh, "MONEY - U.S. BANKS")
-    draw_bank_icon(cv, bx + 14, ty + 4, 92)
-    y = draw_block(cv, bx + 118, ty + 4,
-                   "BUG BLAMED FOR OUTAGE", 4, INK, rw - 122,
-                   line_h=30)
-    draw_block(cv, bx + 118, y + 4,
-               "CHASE: BUG SLOWED BANKING AND ZELLE. NOT A CYBERATTACK.",
-               3, INK, rw - 122, line_h=21)
-    # Vulcan
-    vx = 524
-    ty = panel(cv, vx, by, rw, bh, "SPACE - SATELLITES")
-    draw_rocket_icon(cv, vx + 14, ty + 4, 92)
-    y = draw_block(cv, vx + 118, ty + 4,
-                   "ROCKET FAILS, 40 LOST", 4, INK, rw - 122,
-                   line_h=30)
-    draw_block(cv, vx + 118, y + 4,
-               "VULCAN FAILED. 40 SATELLITES LOST.",
-               3, INK, rw - 122, line_h=21)
+    # Manila, right
+    cv.frame(516, 440, 492, 304, INK, 2)
+    cv.rect(518, 442, 488, 300, PANEL)
+    quad_flags(cv, 542, 446, 440, 50)
+    cv.hline(518, 496, 488, INK, 2)
+    text(cv, 532, 504, "ASIA \u00b7 DIPLOMACY", 2, RED)
+    text(cv, 532, 524, "TRUMP LANDS IN MANILA", 3, INK)
+    para(cv, 532, 552,
+         "First Quad summit in two years launches an AI accelerator; "
+         "Thailand to scrap tariffs on U.S. goods.",
+         3, INK, 460, 26)
+    para(cv, 532, 683,
+         "Quad also agreed deals on critical minerals.",
+         2, INK, 460, 18)
+    text(cv, 532, 722, "1ST QUAD LEADERS' MEETING IN 2 YEARS", 2, RED)
 
-    # --- footer ticker
-    fy = 956
-    cv.fill_rect(12, fy, 1000, 56, INK)
-    draw_text(cv, W // 2, fy + 6,
-              "ALSO: ESTONIA TO SHUT RUSSIA BORDER CROSSINGS", 3, WHITE,
-              align="center")
-    draw_text(cv, W // 2, fy + 31,
-              "FROM 1 DEC - NVIDIA REPORTS AFTER HUANG EXIT", 3, WHITE,
-              align="center")
+    # -------------------------------------------------------- bottom row
+    # Nvidia, left
+    cv.frame(16, 744, 492, 188, INK, 2)
+    cv.rect(18, 746, 488, 184, PANEL)
+    text(cv, 32, 756, "TECH \u00b7 MARKETS", 2, RED)
+    draw_headline(cv, 32, 774, "NVIDIA SALES MORE THAN DOUBLE",
+                  3, INK, 400, 26)
+    para(cv, 32, 830,
+         "$115.8B revenue, up 103%, in its first results since Huang's "
+         "exit.",
+         3, INK, 460, 26)
+    text(cv, 32, 910, "Q4 GUIDANCE: $130B", 2, RED)
+    chip_icon(cv, 452, 752, 44)
+
+    # Chase, right
+    cv.frame(516, 744, 492, 188, INK, 2)
+    cv.rect(518, 746, 488, 184, PANEL)
+    text(cv, 532, 756, "MONEY \u00b7 U.S. BANKS", 2, RED)
+    draw_headline(cv, 532, 774, "BUG, NOT HACK, BLAMED FOR BANK OUTAGE",
+                  3, INK, 400, 26)
+    para(cv, 532, 830,
+         "Software bug slowed Chase banking and Zelle; other banks "
+         "felt delays.",
+         3, INK, 460, 26)
+    text(cv, 532, 910, "~4,800 REPORTS AT PEAK", 2, RED)
+    bank_icon(cv, 948, 752, 44)
+
+    # ------------------------------------------------------------ footer
+    cv.rect(0, 932, W, 92, NAVY)
+    cv.hline(0, 932, W, RED, 3)
+    para(cv, 32, 936,
+         "THE TAKEAWAY: On one day, war widened, diplomacy raced to "
+         "catch up, and the world's money and machines showed both "
+         "fragility and force.",
+         2, WHITE, 960, 17)
+    text(cv, 32, 972, "SOURCES: REUTERS \u00b7 AP \u00b7 BBC \u00b7 "
+         "AL JAZEERA \u00b7 AFP", 2, MIST)
+    para(cv, 32, 990,
+         "ALSO: ROCKET FAILS, 40 SATELLITES LOST \u00b7 ESTONIA TO SHUT "
+         "RUSSIA BORDER CROSSINGS FROM 1 DEC",
+         2, MIST, 960, 16)
+
     return cv
 
 
 def main():
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    os.makedirs(out_dir, exist_ok=True)
-    data = png_bytes(build())
-    with open(os.path.join(out_dir, "entry.png"), "wb") as f:
-        f.write(data)
+    outdir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+    os.makedirs(outdir, exist_ok=True)
+    path = os.path.join(outdir, "entry.png")
+    with open(path, "wb") as fh:
+        fh.write(png_bytes(build()))
+    print("wrote " + path)
 
 
 if __name__ == "__main__":
